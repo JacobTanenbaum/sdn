@@ -136,7 +136,13 @@ func (eip *egressIPWatcher) ClaimEgressIP(vnid uint32, egressIP, nodeIP string) 
 	if nodeIP == eip.localIP {
 		mark := getMarkForVNID(vnid, eip.masqueradeBit)
 		eip.iptablesMark[egressIP] = mark
-		if err := eip.assignEgressIP(egressIP, mark); err != nil {
+		if err := utilwait.PollImmediate(10*time.Millisecond, 2*time.Second, func() (bool, error) {
+			if err := eip.assignEgressIP(egressIP, mark); err != nil {
+				utilruntime.HandleError(fmt.Errorf("Error assigning Egress IP %q: %v retrying", egressIP, err))
+				return false, nil
+			}
+			return true, nil
+		}); err != nil {
 			utilruntime.HandleError(fmt.Errorf("Error assigning Egress IP %q: %v", egressIP, err))
 		}
 	} else {
@@ -148,7 +154,13 @@ func (eip *egressIPWatcher) ReleaseEgressIP(egressIP, nodeIP string) {
 	if nodeIP == eip.localIP {
 		mark := eip.iptablesMark[egressIP]
 		delete(eip.iptablesMark, egressIP)
-		if err := eip.releaseEgressIP(egressIP, mark); err != nil {
+		if err := utilwait.PollImmediate(10*time.Millisecond, 2*time.Second, func() (bool, error) {
+			if err := eip.releaseEgressIP(egressIP, mark); err != nil {
+				utilruntime.HandleError(fmt.Errorf("Error releaseing EgressIP %q: %v retrying", egressIP, err))
+				return false, nil
+			}
+			return true, nil
+		}); err != nil {
 			utilruntime.HandleError(fmt.Errorf("Error releasing Egress IP %q: %v", egressIP, err))
 		}
 	} else {
