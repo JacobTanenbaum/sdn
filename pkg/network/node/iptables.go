@@ -12,6 +12,8 @@ import (
 
 	"k8s.io/klog/v2"
 
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	utilwait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/util/iptables"
 )
 
@@ -254,12 +256,12 @@ func (n *NodeIPTables) DeleteEgressIPRules(egressIP, mark string) error {
 	delete(n.egressIPs, egressIP)
 
 	for _, cidr := range n.clusterNetworkCIDR {
-		err := n.ipt.DeleteRule(iptables.TableNAT, iptables.Chain("OPENSHIFT-MASQUERADE"), "-s", cidr, "-m", "mark", "--mark", mark, "-j", "SNAT", "--to-source", egressIP)
+		err := n.DeleteRule(iptables.TableNAT, iptables.Chain("OPENSHIFT-MASQUERADE"), "-s", cidr, "-m", "mark", "--mark", mark, "-j", "SNAT", "--to-source", egressIP)
 		if err != nil {
 			return err
 		}
 	}
-	return n.ipt.DeleteRule(iptables.TableFilter, iptables.Chain("OPENSHIFT-FIREWALL-ALLOW"), "-d", egressIP, "-m", "conntrack", "--ctstate", "NEW", "-j", "REJECT")
+	return n.DeleteRule(iptables.TableFilter, iptables.Chain("OPENSHIFT-FIREWALL-ALLOW"), "-d", egressIP, "-m", "conntrack", "--ctstate", "NEW", "-j", "REJECT")
 }
 
 var masqRuleRE = regexp.MustCompile(`-A OPENSHIFT-MASQUERADE .* --to-source ([^ ]*)`)
@@ -305,7 +307,7 @@ func (n *NodeIPTables) SyncEgressIPRules() {
 			continue
 		}
 		args = args[2:]
-		err := n.ipt.DeleteRule(iptables.TableNAT, iptables.Chain("OPENSHIFT-MASQUERADE"), args...)
+		err := n.DeleteRule(iptables.TableNAT, iptables.Chain("OPENSHIFT-MASQUERADE"), args...)
 		if err != nil {
 			klog.Warningf("Error deleting iptables masquerade rule for stale egress IP %s: %v", ip, err)
 		}
@@ -319,9 +321,25 @@ func (n *NodeIPTables) SyncEgressIPRules() {
 			continue
 		}
 		args = args[2:]
-		err := n.ipt.DeleteRule(iptables.TableFilter, iptables.Chain("OPENSHIFT-FIREWALL-ALLOW"), args...)
+		err := n.DeleteRule(iptables.TableFilter, iptables.Chain("OPENSHIFT-FIREWALL-ALLOW"), args...)
 		if err != nil {
 			klog.Warningf("Error deleting iptables filter rule for stale egress IP %s: %v", ip, err)
 		}
 	}
+}
+
+func (n *NodeIPTables) DeleteRule(table iptables.Table, chain iptables.Chain, args ...string) error {
+	if err := utilwait.PollImmediate(10*time.Millisecond, 2*time.Second, func() (bool, error) {
+		if err := n.ipt.DeleteRule(table, chain, args...); err != nil {
+			utilruntime.HandleError(fmt.Errorf("Error deleteing iptables Rule: %s %s %s: %v", table, chain, args, err))
+			return false, nil
+		}
+		return true, nil
+
+	}); err != nil {
+		return err
+
+	}
+
+	return nil
 }
